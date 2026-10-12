@@ -1,0 +1,150 @@
+[
+ {
+  "type": "sql",
+  "q": "What was the revenue of Northwind Foods in FY25?",
+  "expect": [
+   "412.5"
+  ]
+ },
+ {
+  "type": "sql",
+  "q": "What was the operating margin of Northwind Foods in FY25 in percent?",
+  "expect": [
+   "14.6"
+  ]
+ },
+ {
+  "type": "rag",
+  "q": "What is the biggest risk Northwind Foods reports?",
+  "expect": [
+   "edible-oil"
+  ],
+  "source": "northwind_foods_annual_report.txt"
+ },
+ {
+  "type": "rag",
+  "q": "What does Northwind Foods plan to do in FY26?",
+  "expect": [
+   "40"
+  ],
+  "source": "northwind_foods_annual_report.txt"
+ },
+ {
+  "type": "sql",
+  "q": "What was the revenue of Orbit Tech in FY25?",
+  "expect": [
+   "1190.0"
+  ]
+ },
+ {
+  "type": "sql",
+  "q": "What was the operating margin of Orbit Tech in FY25 in percent?",
+  "expect": [
+   "18.6"
+  ]
+ },
+ {
+  "type": "rag",
+  "q": "What is the biggest risk Orbit Tech reports?",
+  "expect": [
+   "attrition"
+  ],
+  "source": "orbit_tech_annual_report.txt"
+ },
+ {
+  "type": "rag",
+  "q": "What does Orbit Tech plan to do in FY26?",
+  "expect": [
+   "1200"
+  ],
+  "source": "orbit_tech_annual_report.txt"
+ },
+ {
+  "type": "sql",
+  "q": "What was the revenue of Helio Motors in FY25?",
+  "expect": [
+   "2040.0"
+  ]
+ },
+ {
+  "type": "sql",
+  "q": "What was the operating margin of Helio Motors in FY25 in percent?",
+  "expect": [
+   "8.4"
+  ]
+ },
+ {
+  "type": "rag",
+  "q": "What is the biggest risk Helio Motors reports?",
+  "expect": [
+   "battery"
+  ],
+  "source": "helio_motors_annual_report.txt"
+ },
+ {
+  "type": "rag",
+  "q": "What does Helio Motors plan to do in FY26?",
+  "expect": [
+   "three"
+  ],
+  "source": "helio_motors_annual_report.txt"
+ },
+ {
+  "type": "sql",
+  "q": "What was the revenue of Cedar Pharma in FY25?",
+  "expect": [
+   "702.0"
+  ]
+ },
+ {
+  "type": "sql",
+  "q": "What was the operating margin of Cedar Pharma in FY25 in percent?",
+  "expect": [
+   "18.7"
+  ]
+ },
+ {
+  "type": "rag",
+  "q": "What is the biggest risk Cedar Pharma reports?",
+  "expect": [
+   "USFDA"
+  ],
+  "source": "cedar_pharma_annual_report.txt"
+ },
+ {
+  "type": "rag",
+  "q": "What does Cedar Pharma plan to do in FY26?",
+  "expect": [
+   "12"
+  ],
+  "source": "cedar_pharma_annual_report.txt"
+ },
+ {
+  "type": "sql",
+  "q": "Which company had the highest net profit in FY25?",
+  "expect": [
+   "Orbit Tech"
+  ]
+ },
+ {
+  "type": "sql",
+  "q": "Which company had the lowest total debt in FY24?",
+  "expect": [
+   "Orbit Tech"
+  ]
+ },
+ {
+  "type": "sql",
+  "q": "What was the combined revenue of all companies in FY25?",
+  "expect": [
+   "4344.5"
+  ]
+ },
+ {
+  "type": "sql",
+  "q": "How many employees did Orbit Tech have?",
+  "expect": [
+   "9100"
+  ]
+ }
+]

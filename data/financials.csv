@@ -1,0 +1,17 @@
+company,sector,fiscal_year,revenue_cr,operating_profit_cr,net_profit_cr,total_debt_cr,employees
+Northwind Foods,FMCG,2022,310.0,41.0,27.5,120,3200
+Northwind Foods,FMCG,2023,340.5,46.2,31.0,110,3200
+Northwind Foods,FMCG,2024,377.0,52.9,36.2,98,3200
+Northwind Foods,FMCG,2025,412.5,60.1,41.8,90,3200
+Orbit Tech,IT,2022,820.0,150.0,118.0,0,9100
+Orbit Tech,IT,2023,960.0,182.0,140.0,0,9100
+Orbit Tech,IT,2024,1105.0,210.5,161.0,15,9100
+Orbit Tech,IT,2025,1190.0,221.0,170.5,20,9100
+Helio Motors,Auto,2022,1500.0,118.0,60.0,400,12400
+Helio Motors,Auto,2023,1710.0,137.0,74.0,420,12400
+Helio Motors,Auto,2024,1880.0,160.0,90.5,380,12400
+Helio Motors,Auto,2025,2040.0,171.0,98.0,350,12400
+Cedar Pharma,Pharma,2022,540.0,95.0,70.0,210,5600
+Cedar Pharma,Pharma,2023,585.0,99.5,71.0,190,5600
+Cedar Pharma,Pharma,2024,640.0,118.0,86.5,175,5600
+Cedar Pharma,Pharma,2025,702.0,131.0,97.2,160,5600

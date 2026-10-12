@@ -1,0 +1,4 @@
+company,sector,fiscal_year,revenue_cr,operating_profit_cr,net_profit_cr,total_debt_cr,employees,ebit_margin_pct,ebitda_margin_pct,net_automotive_debt_cr,underlying_ebit_margin_excl_discontinued_pct
+Tata Motors,Automotive,2023,345966.97,42491.51,2689.87,,,3.6,10.7,43687,
+Tata Motors,Automotive,2024,434016.0,68831.0,31807.0,,,8.0,14.1,16022,7.9
+Tata Motors,Automotive,2025,439695.0,65848.0,28149.0,,,7.9,13.1,-1018,7.9

@@ -1,0 +1,9 @@
+pandas
+numpy
+pypdf
+rank-bm25
+sentence-transformers
+openai
+fastapi
+uvicorn
+pytest

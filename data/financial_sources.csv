@@ -1,0 +1,21 @@
+source_id,company,fiscal_year,metric_key,value,unit,reporting_basis,source_file,pdf_page,source_label,definition_notes
+TM23_REV,Tata Motors,2023,revenue_cr,345966.97,INR crore,Consolidated,tata_motors_fy2023.pdf,144,Revenue from operations,Reported financial highlights
+TM23_OP,Tata Motors,2023,operating_profit_cr,42491.51,INR crore,Consolidated,tata_motors_fy2023.pdf,144,Operating profit,Reported financial highlights
+TM23_PAT,Tata Motors,2023,net_profit_cr,2689.87,INR crore,Consolidated,tata_motors_fy2023.pdf,144,Profit for the year,Stored as net_profit_cr; original report label retained
+TM23_EBIT,Tata Motors,2023,ebit_margin_pct,3.6,percent,Consolidated,tata_motors_fy2025.pdf,22,EBIT margin,Company-reported margin; not calculated from operating_profit_cr divided by revenue_cr
+TM23_EBITDA,Tata Motors,2023,ebitda_margin_pct,10.7,percent,Consolidated,tata_motors_fy2025.pdf,22,EBITDA margin,Company-reported margin
+TM23_DEBT,Tata Motors,2023,net_automotive_debt_cr,43687.0,INR crore,Consolidated,tata_motors_fy2025.pdf,22,Net automotive debt/(cash),Positive value represents net automotive debt
+TM24_REV,Tata Motors,2024,revenue_cr,434016.0,INR crore,Consolidated,tata_motors_fy2025.pdf,154,Revenue from operations,Comparative figure in FY2025 report
+TM24_OP,Tata Motors,2024,operating_profit_cr,68831.0,INR crore,Consolidated,tata_motors_fy2025.pdf,154,Operating profit,Comparative figure in FY2025 report
+TM24_PAT,Tata Motors,2024,net_profit_cr,31807.0,INR crore,Consolidated,tata_motors_fy2025.pdf,154,Profit for the year,Comparative figure in FY2025 report
+TM24_EBIT,Tata Motors,2024,ebit_margin_pct,8.0,percent,Consolidated,tata_motors_fy2025.pdf,22,EBIT margin,Company-reported margin
+TM24_EBITDA,Tata Motors,2024,ebitda_margin_pct,14.1,percent,Consolidated,tata_motors_fy2025.pdf,22,EBITDA margin,Company-reported margin
+TM24_DEBT,Tata Motors,2024,net_automotive_debt_cr,16022.0,INR crore,Consolidated,tata_motors_fy2025.pdf,22,Net automotive debt/(cash),Positive value represents net automotive debt
+TM25_REV,Tata Motors,2025,revenue_cr,439695.0,INR crore,Consolidated,tata_motors_fy2025.pdf,154,Revenue from operations,Reported FY2025 financial highlights
+TM25_OP,Tata Motors,2025,operating_profit_cr,65848.0,INR crore,Consolidated,tata_motors_fy2025.pdf,154,Operating profit,Reported FY2025 financial highlights
+TM25_PAT,Tata Motors,2025,net_profit_cr,28149.0,INR crore,Consolidated,tata_motors_fy2025.pdf,154,Profit for the year,Reported FY2025 financial highlights
+TM25_EBIT,Tata Motors,2025,ebit_margin_pct,7.9,percent,Consolidated,tata_motors_fy2025.pdf,22,EBIT margin,Company-reported margin
+TM25_EBITDA,Tata Motors,2025,ebitda_margin_pct,13.1,percent,Consolidated,tata_motors_fy2025.pdf,22,EBITDA margin,Company-reported margin
+TM25_DEBT,Tata Motors,2025,net_automotive_debt_cr,-1018.0,INR crore,Consolidated,tata_motors_fy2025.pdf,22,Net automotive debt/(cash),Negative value represents net automotive cash
+TM24_UNDERLYING_EBIT,Tata Motors,2024,underlying_ebit_margin_excl_discontinued_pct,7.9,percent,Consolidated; excluding discontinued operations,tata_motors_fy2025.pdf,154,Underlying EBIT margin (excluding discontinued operations),FY2024 comparative reported in the FY2025 annual report; distinct from the headline EBIT margin.
+TM25_UNDERLYING_EBIT,Tata Motors,2025,underlying_ebit_margin_excl_discontinued_pct,7.9,percent,Consolidated; excluding discontinued operations,tata_motors_fy2025.pdf,154,Underlying EBIT margin (excluding discontinued operations),FY2025 reported margin; distinct from the headline EBIT margin.
