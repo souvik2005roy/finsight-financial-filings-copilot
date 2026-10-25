@@ -58,4 +58,5 @@ Question: {question}""")
             "sql": sql,
             "sources": sources,
             "unverified": bad,
+            "evidence": evidence,
         }
