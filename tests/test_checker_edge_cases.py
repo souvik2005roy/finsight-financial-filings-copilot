@@ -53,3 +53,22 @@ def test_unsupported_small_percentage_is_flagged():
     evidence = "The reported EBIT margin was 7.9%."
 
     assert unverified_numbers(answer, evidence) == [5.0]
+
+def test_number_supported_only_by_wrong_metric_is_flagged():
+    answer = "Tata Motors' reported EBIT margin was 12% in FY2025."
+    evidence = (
+        "Revenue growth was 12% in FY2025. "
+        "Reported EBIT margin was 7.9% in FY2025."
+    )
+
+    assert unverified_numbers(answer, evidence) == [12.0]
+
+
+def test_number_supported_only_by_wrong_year_is_flagged():
+    answer = "Tata Motors' reported EBIT margin was 8.0% in FY2025."
+    evidence = (
+        "Reported EBIT margin was 8.0% in FY2024. "
+        "Reported EBIT margin was 7.9% in FY2025."
+    )
+
+    assert unverified_numbers(answer, evidence) == [8.0]

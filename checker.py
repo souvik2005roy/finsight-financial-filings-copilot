@@ -1,23 +1,25 @@
 ﻿
-"""Flag numeric claims not supported by the supplied evidence."""
+"""Flag numeric claims not supported by supplied evidence."""
 
 import re
 
 NUMBER = re.compile(r"(?<![\w.])-?\d[\d,]*\.?\d*")
 
-# Citation metadata is not a financial claim.
 CITATION = re.compile(
     r"\[[^\]]*(?:\.pdf\b|PDF\s+page)[^\]]*\]",
     re.IGNORECASE,
 )
 
-# Fiscal years and ranges are labels, not financial metrics.
 FISCAL_YEAR = re.compile(
     r"\bFY\s*\d{2,4}(?:\s*[-–/]\s*\d{2,4})?\b",
     re.IGNORECASE,
 )
 
-# Units that make a number meaningful even when it is small.
+FISCAL_YEAR_VALUE = re.compile(
+    r"\bFY\s*(\d{2,4})\b",
+    re.IGNORECASE,
+)
+
 EXPLICIT_UNIT = re.compile(
     r"\s*(?:%|percent\b|percentage(?:\s+points?)?\b|"
     r"percentage-point\b|crores?\b|cr\b|lakhs?\b|"
@@ -30,7 +32,6 @@ CURRENCY_PREFIX = re.compile(
     re.IGNORECASE,
 )
 
-# Financial terminology immediately before a number suggests a claim.
 FINANCIAL_CONTEXT = re.compile(
     r"\b(?:margin|profit|revenue|sales|EBIT|EBITDA|income|"
     r"debt|cost|growth|rate|ratio|return|cash\s+flow|"
@@ -38,39 +39,193 @@ FINANCIAL_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 
+# Specific metric phrases are listed before general terms.
+METRIC_PATTERNS = [
+    ("ebitda_margin", re.compile(r"\bEBITDA\s+margin\b", re.I)),
+    ("ebit_margin", re.compile(r"\bEBIT\s+margin\b", re.I)),
+    ("operating_margin", re.compile(r"\boperating\s+margin\b", re.I)),
+    ("gross_margin", re.compile(r"\bgross\s+margin\b", re.I)),
+    ("net_margin", re.compile(r"\bnet\s+margin\b", re.I)),
+    (
+        "revenue_growth",
+        re.compile(r"\b(?:revenue|sales)\s+growth\b", re.I),
+    ),
+    ("operating_profit", re.compile(r"\boperating\s+profit\b", re.I)),
+    ("net_profit", re.compile(r"\bnet\s+profit\b", re.I)),
+    ("revenue", re.compile(r"\b(?:revenue|sales|turnover)\b", re.I)),
+    ("profit", re.compile(r"\bprofit\b", re.I)),
+    ("debt", re.compile(r"\bdebt\b", re.I)),
+    ("margin", re.compile(r"\bmargin\b", re.I)),
+    ("growth", re.compile(r"\bgrowth\b", re.I)),
+]
+
 
 def numbers_in(text):
     """Extract numeric values from text."""
-    out = []
+    result = []
 
     for match in NUMBER.findall(text):
         try:
-            out.append(float(match.replace(",", "").rstrip(".")))
+            result.append(float(match.replace(",", "").rstrip(".")))
         except ValueError:
             pass
 
-    return out
+    return result
+
+
+def _mask_matches(pattern, text):
+    """Replace matches with spaces while preserving text positions."""
+    return pattern.sub(
+        lambda match: " " * len(match.group()),
+        text,
+    )
 
 
 def _clean_answer_for_number_check(answer):
-    """Remove citation metadata and fiscal-year labels."""
-    answer = CITATION.sub(" ", answer)
-    answer = FISCAL_YEAR.sub(" ", answer)
-    return answer
+    """Mask citations and fiscal-year labels without shifting positions."""
+    answer = _mask_matches(CITATION, answer)
+    return _mask_matches(FISCAL_YEAR, answer)
+
+
+def _sentence_bounds(text, position):
+    """Find the sentence containing a character position."""
+    start = 0
+
+    for index, char in enumerate(text[:position]):
+        if char == "\n":
+            start = index + 1
+        elif (
+            char in ".!?"
+            and (index + 1 == len(text) or text[index + 1].isspace())
+        ):
+            start = index + 1
+
+    end = len(text)
+
+    for index in range(position, len(text)):
+        char = text[index]
+
+        if char == "\n":
+            end = index
+            break
+
+        if (
+            char in ".!?"
+            and (index + 1 == len(text) or text[index + 1].isspace())
+        ):
+            end = index + 1
+            break
+
+    while start < end and text[start].isspace():
+        start += 1
+
+    return start, end
+
+
+def _context_for_number(text, start, end):
+    """Infer the nearest metric and fiscal year for a numeric value."""
+    sentence_start, sentence_end = _sentence_bounds(text, start)
+    sentence = text[sentence_start:sentence_end]
+
+    number_start = start - sentence_start
+    number_end = end - sentence_start
+
+    # Find the closest financial metric in the sentence.
+    metric_candidates = []
+
+    for metric_name, pattern in METRIC_PATTERNS:
+        for match in pattern.finditer(sentence):
+            if match.end() <= number_start:
+                distance = number_start - match.end()
+            elif match.start() >= number_end:
+                distance = match.start() - number_end
+            else:
+                distance = 0
+
+            metric_candidates.append(
+                (distance, -len(match.group()), metric_name)
+            )
+
+    metric = min(metric_candidates)[2] if metric_candidates else None
+
+    # First, look for an explicit year following the numeric value.
+    # Examples: "7.9% in FY2025", "revenue of 5 crore for FY2025".
+    tail = sentence[number_end:]
+
+    after_value_year = re.match(
+        r"\s*(?:%|percent\b|percentage(?:\s+points?)?\b|"
+        r"percentage-point\b|crores?\b|cr\b|lakhs?\b|"
+        r"million\b|billion\b|rupees?\b|dollars?\b)?"
+        r"\s*(?:in|for|during|as of)\s+FY\s*(\d{2,4})\b",
+        tail,
+        re.IGNORECASE,
+    )
+
+    if after_value_year:
+        year_text = after_value_year.group(1)
+        year = int(year_text)
+
+        if len(year_text) == 2:
+            year += 2000
+
+        return metric, year
+
+    # Otherwise, use the nearest year in the sentence.
+    # Prefer a year before the value if distances are equal.
+    year_candidates = []
+
+    for match in FISCAL_YEAR_VALUE.finditer(sentence):
+        year_text = match.group(1)
+        year = int(year_text)
+
+        if len(year_text) == 2:
+            year += 2000
+
+        if match.end() <= number_start:
+            distance = number_start - match.end()
+            side_priority = 0
+        elif match.start() >= number_end:
+            distance = match.start() - number_end
+            side_priority = 1
+        else:
+            distance = 0
+            side_priority = 0
+
+        year_candidates.append((distance, side_priority, year))
+
+    year = min(year_candidates)[2] if year_candidates else None
+
+    return metric, year
 
 
 def unverified_numbers(answer, evidence, tol=0.01):
-    """Return answer numbers not supported by the supplied evidence.
+    """Flag numbers unsupported by the supplied evidence.
 
-    Ignores citation metadata, fiscal-year labels, calendar years,
-    and small whole numbers used as ordinary counts or list markers.
-    Small numbers with units or financial context are still checked.
+    Numbers are compared using a tolerance. Where possible, matching
+    values must also share the same inferred metric and fiscal year.
 
-    Note: This is a heuristic evidence check, not a semantic
-    verification of whether a number belongs to the correct metric.
+    This is a heuristic check, not a complete semantic fact verifier.
     """
-    known = numbers_in(evidence)
+    answer_context = _mask_matches(CITATION, answer)
+    evidence_context = _mask_matches(CITATION, evidence)
     cleaned_answer = _clean_answer_for_number_check(answer)
+
+    evidence_numbers = []
+
+    for match in NUMBER.finditer(evidence_context):
+        try:
+            value = float(match.group().replace(",", "").rstrip("."))
+        except ValueError:
+            continue
+
+        context = _context_for_number(
+            evidence_context,
+            match.start(),
+            match.end(),
+        )
+
+        evidence_numbers.append((value, context))
+
     bad = []
 
     for match in NUMBER.finditer(cleaned_answer):
@@ -94,8 +249,8 @@ def unverified_numbers(answer, evidence, tol=0.01):
             FINANCIAL_CONTEXT.search(prefix[-80:])
         )
 
-        # Ignore small whole numbers used as counts/list markers,
-        # but check them when they express a financial claim.
+        # Ignore ordinary small counts and list markers, but retain
+        # small numbers that express financial claims or have units.
         if (
             number.is_integer()
             and abs(number) <= 10
@@ -105,13 +260,43 @@ def unverified_numbers(answer, evidence, tol=0.01):
         ):
             continue
 
-        # Check whether the answer number is supported by evidence.
-        if not any(
-            abs(number - value) <= max(0.06, tol * abs(value))
-            for value in known
-        ):
+        answer_metric, answer_year = _context_for_number(
+            answer_context,
+            match.start(),
+            match.end(),
+        )
+
+        supported = False
+
+        for evidence_value, evidence_context_info in evidence_numbers:
+            tolerance = max(0.06, tol * abs(evidence_value))
+
+            if abs(number - evidence_value) > tolerance:
+                continue
+
+            evidence_metric, evidence_year = evidence_context_info
+
+            # Do not accept a figure associated with another metric.
+            if (
+                answer_metric is not None
+                and evidence_metric is not None
+                and answer_metric != evidence_metric
+            ):
+                continue
+
+            # Do not accept a figure associated with another year.
+            if (
+                answer_year is not None
+                and evidence_year is not None
+                and answer_year != evidence_year
+            ):
+                continue
+
+            supported = True
+            break
+
+        if not supported:
             bad.append(number)
 
     return bad
-
 
