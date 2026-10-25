@@ -1,4 +1,9 @@
-﻿import json
+﻿
+"""Evaluate FinSight answer quality while separating API failures from
+genuine routing, answer, and citation failures.
+"""
+
+import json
 import re
 from datetime import datetime
 from pathlib import Path
@@ -6,12 +11,13 @@ from pathlib import Path
 from checker import unverified_numbers
 from pipeline import FinSight
 
+
 ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / "results"
 RESULTS.mkdir(exist_ok=True)
 
-# Fixed questions and expected facts, based on our current pilot dataset
-# and the manually reviewed Tata Motors annual-report pages.
+# Fixed questions and expected facts based on the current pilot dataset
+# and manually reviewed Tata Motors annual-report pages.
 CASES = [
     {
         "name": "FY2025 reported EBIT margin",
@@ -67,6 +73,7 @@ CASES = [
 NUMBER_RE = re.compile(
     r"(?<![\w])[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 )
+
 CITATION_RE = re.compile(
     r"\[([^\]]+\.pdf\s*,\s*PDF page\s+\d+)\]",
     re.IGNORECASE,
@@ -74,16 +81,20 @@ CITATION_RE = re.compile(
 
 
 def answer_numbers(text):
+    """Extract numeric values from an answer."""
     values = []
+
     for item in NUMBER_RE.findall(text or ""):
         try:
             values.append(float(item.replace(",", "")))
         except ValueError:
             pass
+
     return values
 
 
 def contains_value(text, target):
+    """Check whether an answer contains an expected numeric value."""
     return any(
         abs(value - target) <= 0.02
         for value in answer_numbers(text)
@@ -91,40 +102,57 @@ def contains_value(text, target):
 
 
 def page_pairs(labels):
+    """Extract (filename, PDF page number) pairs from source labels."""
     found = set()
+
     for label in labels:
         match = re.search(
             r"([^,\[\]]+\.pdf)\s*,\s*PDF page\s+(\d+)",
             label,
             re.IGNORECASE,
         )
+
         if match:
             found.add(
                 (match.group(1).strip(), int(match.group(2)))
             )
+
     return found
 
 
 def normalized_citation(citation):
-    return re.sub(r"\s+", " ", citation.strip(" []")).casefold()
+    """Normalize citation text for reliable comparison."""
+    return re.sub(
+        r"\s+",
+        " ",
+        citation.strip(" []"),
+    ).casefold()
 
 
 def checker_sanity_tests():
-    # Citation page numbers and fiscal-year labels must not trigger warnings.
+    """Run lightweight checker tests without making API requests."""
     metadata_answer = (
         "Supply disruptions during FY2024–25 "
         "[tata_motors_fy2025.pdf, PDF page 75]."
     )
-    metadata_evidence = "Supplier disruptions can increase lead times."
+    metadata_evidence = (
+        "Supplier disruptions can increase lead times."
+    )
+
     metadata_pass = (
         unverified_numbers(metadata_answer, metadata_evidence) == []
     )
 
-    # A deliberately unsupported financial percentage should be flagged.
     invented_answer = "Raw-material costs increased by 18.5%."
-    invented_evidence = "Raw-material supply constraints remain a concern."
+    invented_evidence = (
+        "Raw-material supply constraints remain a concern."
+    )
+
     invented_pass = (
-        18.5 in unverified_numbers(invented_answer, invented_evidence)
+        18.5 in unverified_numbers(
+            invented_answer,
+            invented_evidence,
+        )
     )
 
     return {
@@ -133,23 +161,234 @@ def checker_sanity_tests():
     }
 
 
+def is_api_failure(exc):
+    """Identify API, connection, timeout, and quota-related failures."""
+    details = f"{type(exc).__name__}: {exc}".casefold()
+
+    indicators = (
+        "llm_api_key",
+        "api key",
+        "apitimeouterror",
+        "apiconnectionerror",
+        "internalservererror",
+        "ratelimiterror",
+        "authenticationerror",
+        "permissiondeniederror",
+        "request timed out",
+        "timed out",
+        "http 503",
+        "http 429",
+        "http 529",
+        "503",
+        "429",
+        "529",
+        "quota",
+        "resource_exhausted",
+        "unavailable",
+        "service unavailable",
+        "rate limit",
+        "too many requests",
+        "server requested retry",
+    )
+
+    return any(indicator in details for indicator in indicators)
+
+
+def rate_or_none(passed, denominator):
+    """Return a rate, or None when there are no eligible questions."""
+    if denominator == 0:
+        return None
+
+    return passed / denominator
+
+
+def format_rate(value):
+    """Format a metric without confusing unavailable data with zero."""
+    if value is None:
+        return "N/A (no evaluated questions)"
+
+    return f"{value:.1%}"
+
+
+def build_summary(records, checker_results):
+    """Summarize completed evaluations separately from failed requests."""
+    total = len(records)
+
+    completed = [
+        record
+        for record in records
+        if record.get("status") == "completed"
+    ]
+
+    sql_records = [
+        record
+        for record in completed
+        if record.get("expected_route") == "sql"
+    ]
+
+    rag_records = [
+        record
+        for record in completed
+        if record.get("expected_route") == "docs"
+    ]
+
+    api_failures = [
+        record
+        for record in records
+        if record.get("status") == "api_error"
+    ]
+
+    evaluation_failures = [
+        record
+        for record in records
+        if record.get("status") == "evaluation_error"
+    ]
+
+    completed_count = len(completed)
+
+    if total > 0 and completed_count == total:
+        evaluation_status = "complete"
+    elif completed_count == 0:
+        evaluation_status = "blocked"
+    else:
+        evaluation_status = "incomplete"
+
+    routing_passes = sum(
+        record.get("route_pass") is True
+        for record in completed
+    )
+
+    sql_passes = sum(
+        record.get("answer_pass") is True
+        for record in sql_records
+    )
+
+    rag_passes = sum(
+        record.get("answer_pass") is True
+        for record in rag_records
+    )
+
+    return {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "evaluation_status": evaluation_status,
+        "questions": total,
+        "questions_attempted": total,
+        "questions_completed": completed_count,
+        "questions_failed": total - completed_count,
+        "api_failures": len(api_failures),
+        "evaluation_failures": len(evaluation_failures),
+        "routing_accuracy": rate_or_none(
+            routing_passes,
+            completed_count,
+        ),
+        "sql_answer_pass_rate": rate_or_none(
+            sql_passes,
+            len(sql_records),
+        ),
+        "rag_retrieval_and_citation_pass_rate": rate_or_none(
+            rag_passes,
+            len(rag_records),
+        ),
+        "checker_sanity_tests": checker_results,
+        "failures": [
+            {
+                "name": record.get("name"),
+                "status": record.get("status"),
+                "error": record.get("error"),
+            }
+            for record in records
+            if record.get("status") != "completed"
+        ],
+        "results": records,
+    }
+
+
+def save_summary(records, checker_results):
+    """Save the complete evaluation report and print its summary."""
+    summary = build_summary(records, checker_results)
+    output_path = RESULTS / "answer_eval_latest.json"
+
+    output_path.write_text(
+        json.dumps(summary, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    print("\n" + "=" * 72)
+    print("EVALUATION SUMMARY")
+    print("Status:", summary["evaluation_status"].upper())
+    print(
+        "Questions completed:",
+        f"{summary['questions_completed']}/"
+        f"{summary['questions_attempted']}",
+    )
+    print("Questions failed:", summary["questions_failed"])
+    print("API failures:", summary["api_failures"])
+    print("Other evaluation failures:", summary["evaluation_failures"])
+    print("Routing accuracy:", format_rate(summary["routing_accuracy"]))
+    print(
+        "SQL answer pass rate:",
+        format_rate(summary["sql_answer_pass_rate"]),
+    )
+    print(
+        "RAG retrieval/citation pass rate:",
+        format_rate(summary["rag_retrieval_and_citation_pass_rate"]),
+    )
+    print("Results saved to:", output_path)
+
+    return summary
+
+
 def main():
     checker_results = checker_sanity_tests()
 
     print("NUMBER-CHECKER SANITY TESTS")
+
     for name, passed in checker_results.items():
         print(f"  {name}: {'PASS' if passed else 'FAIL'}")
 
     if not all(checker_results.values()):
-        print("Fix the number checker before trusting the evaluation.")
+        print(
+            "WARNING: Fix the number checker before trusting "
+            "the evaluation."
+        )
 
-    financial_csv = "data/financials_tata_motors_v2.csv"
-    docs_dir = "data/docs"
-
-    print("\nLoading FinSight...")
-    bot = FinSight(csv=financial_csv, docs=docs_dir)
+    financial_csv = str(
+        ROOT / "data" / "financials_tata_motors_v2.csv"
+    )
+    docs_dir = str(ROOT / "data" / "docs")
 
     records = []
+
+    print("\nLoading FinSight...")
+
+    # Handle pipeline initialization failures gracefully as well.
+    try:
+        bot = FinSight(csv=financial_csv, docs=docs_dir)
+    except Exception as exc:
+        status = (
+            "api_error"
+            if is_api_failure(exc)
+            else "evaluation_error"
+        )
+
+        print(
+            "INITIALIZATION FAILURE:",
+            type(exc).__name__,
+            str(exc),
+        )
+
+        for case in CASES:
+            records.append({
+                "name": case["name"],
+                "question": case["question"],
+                "expected_route": case["route"],
+                "status": status,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            })
+
+        save_summary(records, checker_results)
+        return
 
     try:
         for case in CASES:
@@ -161,10 +400,15 @@ def main():
                 "name": case["name"],
                 "question": case["question"],
                 "expected_route": case["route"],
+                "status": "pending",
             }
 
             try:
-                output = bot.ask(case["question"], mode="hybrid")
+                output = bot.ask(
+                    case["question"],
+                    mode="hybrid",
+                )
+
                 answer = output.get("answer") or ""
                 route = output.get("route")
                 sql = output.get("sql")
@@ -185,13 +429,17 @@ def main():
                 print("SQL:", sql)
                 print("SOURCES:", sources)
                 print("UNVERIFIED:", warnings)
-                print("ROUTE CHECK:", "PASS" if record["route_pass"] else "FAIL")
+                print(
+                    "ROUTE CHECK:",
+                    "PASS" if record["route_pass"] else "FAIL",
+                )
 
                 if case["route"] == "sql":
                     number_checks = {
                         str(value): contains_value(answer, value)
                         for value in case["expected_numbers"]
                     }
+
                     answer_pass = (
                         route == "sql"
                         and bool(sql)
@@ -216,6 +464,7 @@ def main():
                         normalized_citation(item)
                         for item in CITATION_RE.findall(answer)
                     }
+
                     available = {
                         normalized_citation(item)
                         for item in sources
@@ -223,10 +472,12 @@ def main():
 
                     citation_present = bool(cited)
                     citations_grounded = (
-                        citation_present and cited.issubset(available)
+                        citation_present
+                        and cited.issubset(available)
                     )
-                    expected_pages_found = expected_pages.issubset(
-                        retrieved_pages
+
+                    expected_pages_found = (
+                        expected_pages.issubset(retrieved_pages)
                     )
 
                     rag_pass = (
@@ -249,71 +500,54 @@ def main():
                         "answer_pass": rag_pass,
                     })
 
-                    print("EXPECTED PAGES FOUND:", expected_pages_found)
+                    print(
+                        "EXPECTED PAGES FOUND:",
+                        expected_pages_found,
+                    )
                     print("CITATIONS PRESENT:", citation_present)
-                    print("CITATIONS MATCH RETRIEVED SOURCES:", citations_grounded)
+                    print(
+                        "CITATIONS MATCH RETRIEVED SOURCES:",
+                        citations_grounded,
+                    )
                     print(
                         "RAG CHECK:",
                         "PASS" if rag_pass else "FAIL",
                     )
 
+                # Only mark a question completed after its checks finish.
+                record["status"] = "completed"
+
             except Exception as exc:
+                status = (
+                    "api_error"
+                    if is_api_failure(exc)
+                    else "evaluation_error"
+                )
+
                 record.update({
-                    "error": f"{type(exc).__name__}: {exc}",
-                    "answer_pass": False,
+                    "status": status,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
                 })
-                print("ERROR:", type(exc).__name__, str(exc))
+
+                print(
+                    "API FAILURE:" if status == "api_error"
+                    else "EVALUATION ERROR:",
+                    type(exc).__name__,
+                    str(exc),
+                )
 
             records.append(record)
 
     finally:
-        bot.conn.close()
+        connection = getattr(bot, "conn", None)
 
-    sql_records = [
-        r for r, c in zip(records, CASES) if c["route"] == "sql"
-    ]
-    rag_records = [
-        r for r, c in zip(records, CASES) if c["route"] == "docs"
-    ]
+        if connection is not None and hasattr(connection, "close"):
+            connection.close()
 
-    summary = {
-        "timestamp": datetime.now().isoformat(timespec="seconds"),
-        "questions": len(records),
-        "routing_accuracy": (
-            sum(r.get("route_pass", False) for r in records)
-            / len(records)
-            if records else 0
-        ),
-        "sql_answer_pass_rate": (
-            sum(r.get("answer_pass", False) for r in sql_records)
-            / len(sql_records)
-            if sql_records else 0
-        ),
-        "rag_retrieval_and_citation_pass_rate": (
-            sum(r.get("answer_pass", False) for r in rag_records)
-            / len(rag_records)
-            if rag_records else 0
-        ),
-        "checker_sanity_tests": checker_results,
-        "results": records,
-    }
-
-    output_path = RESULTS / "answer_eval_latest.json"
-    output_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    print("\n" + "=" * 72)
-    print("EVALUATION SUMMARY")
-    print("Routing accuracy:",
-          f"{summary['routing_accuracy']:.1%}")
-    print("SQL answer pass rate:",
-          f"{summary['sql_answer_pass_rate']:.1%}")
-    print("RAG retrieval/citation pass rate:",
-          f"{summary['rag_retrieval_and_citation_pass_rate']:.1%}")
-    print("Results saved to:", output_path)
+    save_summary(records, checker_results)
 
 
 if __name__ == "__main__":
     main()
+
