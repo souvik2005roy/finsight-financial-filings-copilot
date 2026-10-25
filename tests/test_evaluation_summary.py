@@ -56,3 +56,47 @@ def test_no_successful_questions_produces_unavailable_metrics():
     assert summary["routing_accuracy"] is None
     assert summary["sql_answer_pass_rate"] is None
     assert summary["rag_retrieval_and_citation_pass_rate"] is None
+
+from evaluate_answers import is_quota_exhaustion
+
+
+def test_quota_exhaustion_is_detected():
+    error = RuntimeError(
+        "Server requested retry after 52917s. "
+        "This is treated as a quota exhaustion."
+    )
+
+    assert is_quota_exhaustion(error) is True
+
+
+def test_temporary_timeout_is_not_misclassified_as_quota():
+    error = TimeoutError("Request timed out.")
+
+    assert is_quota_exhaustion(error) is False
+
+
+def test_skipped_questions_are_not_counted_as_attempted():
+    records = [
+        {
+            "name": "First question",
+            "expected_route": "sql",
+            "status": "api_error",
+            "error": "Quota exhausted",
+        },
+        {
+            "name": "Second question",
+            "expected_route": "sql",
+            "status": "skipped",
+            "skip_reason": "Quota exhausted",
+        },
+    ]
+
+    summary = build_summary(records, {"checker_test": True})
+
+    assert summary["evaluation_status"] == "blocked"
+    assert summary["questions_attempted"] == 1
+    assert summary["questions_completed"] == 0
+    assert summary["questions_failed"] == 1
+    assert summary["questions_skipped"] == 1
+    assert summary["routing_accuracy"] is None
+    assert summary["sql_answer_pass_rate"] is None

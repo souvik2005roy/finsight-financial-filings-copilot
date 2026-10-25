@@ -1,6 +1,6 @@
 ﻿
-"""Evaluate FinSight answer quality while separating API failures from
-genuine routing, answer, and citation failures.
+"""Evaluate FinSight answer quality without confusing API failures
+with incorrect answers. Stops the benchmark when API quota is exhausted.
 """
 
 import json
@@ -16,8 +16,7 @@ ROOT = Path(__file__).resolve().parent
 RESULTS = ROOT / "results"
 RESULTS.mkdir(exist_ok=True)
 
-# Fixed questions and expected facts based on the current pilot dataset
-# and manually reviewed Tata Motors annual-report pages.
+# Manually reviewed questions and expected facts for the Tata Motors pilot.
 CASES = [
     {
         "name": "FY2025 reported EBIT margin",
@@ -94,7 +93,7 @@ def answer_numbers(text):
 
 
 def contains_value(text, target):
-    """Check whether an answer contains an expected numeric value."""
+    """Check whether an expected number appears in the answer."""
     return any(
         abs(value - target) <= 0.02
         for value in answer_numbers(text)
@@ -121,7 +120,7 @@ def page_pairs(labels):
 
 
 def normalized_citation(citation):
-    """Normalize citation text for reliable comparison."""
+    """Normalize citation text before comparison."""
     return re.sub(
         r"\s+",
         " ",
@@ -130,7 +129,7 @@ def normalized_citation(citation):
 
 
 def checker_sanity_tests():
-    """Run lightweight checker tests without making API requests."""
+    """Run checker sanity tests without calling the language model."""
     metadata_answer = (
         "Supply disruptions during FY2024–25 "
         "[tata_motors_fy2025.pdf, PDF page 75]."
@@ -162,7 +161,7 @@ def checker_sanity_tests():
 
 
 def is_api_failure(exc):
-    """Identify API, connection, timeout, and quota-related failures."""
+    """Identify API, network, timeout, authentication, or quota errors."""
     details = f"{type(exc).__name__}: {exc}".casefold()
 
     indicators = (
@@ -194,8 +193,27 @@ def is_api_failure(exc):
     return any(indicator in details for indicator in indicators)
 
 
+def is_quota_exhaustion(exc):
+    """Identify quota exhaustion that should stop the benchmark."""
+    details = f"{type(exc).__name__}: {exc}".casefold()
+
+    indicators = (
+        "quota",
+        "resource_exhausted",
+        "quota exceeded",
+        "http 429",
+        "429",
+        "rate limit",
+        "ratelimiterror",
+        "too many requests",
+        "server requested retry after",
+    )
+
+    return any(indicator in details for indicator in indicators)
+
+
 def rate_or_none(passed, denominator):
-    """Return a rate, or None when there are no eligible questions."""
+    """Return None instead of 0 when no questions were evaluated."""
     if denominator == 0:
         return None
 
@@ -203,7 +221,7 @@ def rate_or_none(passed, denominator):
 
 
 def format_rate(value):
-    """Format a metric without confusing unavailable data with zero."""
+    """Format an unavailable metric without presenting it as zero."""
     if value is None:
         return "N/A (no evaluated questions)"
 
@@ -211,13 +229,23 @@ def format_rate(value):
 
 
 def build_summary(records, checker_results):
-    """Summarize completed evaluations separately from failed requests."""
+    """Calculate metrics using completed evaluations only."""
     total = len(records)
 
     completed = [
         record
         for record in records
         if record.get("status") == "completed"
+    ]
+
+    attempted = [
+        record
+        for record in records
+        if record.get("status") in {
+            "completed",
+            "api_error",
+            "evaluation_error",
+        }
     ]
 
     sql_records = [
@@ -242,6 +270,12 @@ def build_summary(records, checker_results):
         record
         for record in records
         if record.get("status") == "evaluation_error"
+    ]
+
+    skipped = [
+        record
+        for record in records
+        if record.get("status") == "skipped"
     ]
 
     completed_count = len(completed)
@@ -272,11 +306,18 @@ def build_summary(records, checker_results):
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "evaluation_status": evaluation_status,
         "questions": total,
-        "questions_attempted": total,
+        "questions_attempted": len(attempted),
         "questions_completed": completed_count,
-        "questions_failed": total - completed_count,
+        "questions_failed": (
+            len(api_failures) + len(evaluation_failures)
+        ),
+        "questions_skipped": len(skipped),
         "api_failures": len(api_failures),
         "evaluation_failures": len(evaluation_failures),
+        "answer_failures": sum(
+            record.get("answer_pass") is False
+            for record in completed
+        ),
         "routing_accuracy": rate_or_none(
             routing_passes,
             completed_count,
@@ -295,6 +336,7 @@ def build_summary(records, checker_results):
                 "name": record.get("name"),
                 "status": record.get("status"),
                 "error": record.get("error"),
+                "reason": record.get("skip_reason"),
             }
             for record in records
             if record.get("status") != "completed"
@@ -304,7 +346,7 @@ def build_summary(records, checker_results):
 
 
 def save_summary(records, checker_results):
-    """Save the complete evaluation report and print its summary."""
+    """Write the evaluation report and print its summary."""
     summary = build_summary(records, checker_results)
     output_path = RESULTS / "answer_eval_latest.json"
 
@@ -319,11 +361,14 @@ def save_summary(records, checker_results):
     print(
         "Questions completed:",
         f"{summary['questions_completed']}/"
-        f"{summary['questions_attempted']}",
+        f"{summary['questions']}",
     )
+    print("Questions attempted:", summary["questions_attempted"])
     print("Questions failed:", summary["questions_failed"])
+    print("Questions skipped:", summary["questions_skipped"])
     print("API failures:", summary["api_failures"])
     print("Other evaluation failures:", summary["evaluation_failures"])
+    print("Answer failures:", summary["answer_failures"])
     print("Routing accuracy:", format_rate(summary["routing_accuracy"]))
     print(
         "SQL answer pass rate:",
@@ -338,6 +383,18 @@ def save_summary(records, checker_results):
     return summary
 
 
+def append_skipped(records, cases, reason):
+    """Record unevaluated cases without treating them as failed answers."""
+    for case in cases:
+        records.append({
+            "name": case["name"],
+            "question": case["question"],
+            "expected_route": case["route"],
+            "status": "skipped",
+            "skip_reason": reason,
+        })
+
+
 def main():
     checker_results = checker_sanity_tests()
 
@@ -347,10 +404,7 @@ def main():
         print(f"  {name}: {'PASS' if passed else 'FAIL'}")
 
     if not all(checker_results.values()):
-        print(
-            "WARNING: Fix the number checker before trusting "
-            "the evaluation."
-        )
+        print("WARNING: Fix the number checker before trusting evaluation.")
 
     financial_csv = str(
         ROOT / "data" / "financials_tata_motors_v2.csv"
@@ -358,10 +412,11 @@ def main():
     docs_dir = str(ROOT / "data" / "docs")
 
     records = []
+    bot = None
 
     print("\nLoading FinSight...")
 
-    # Handle pipeline initialization failures gracefully as well.
+    # Handle initialization errors without a traceback or misleading scores.
     try:
         bot = FinSight(csv=financial_csv, docs=docs_dir)
     except Exception as exc:
@@ -377,21 +432,27 @@ def main():
             str(exc),
         )
 
-        for case in CASES:
+        if CASES:
             records.append({
-                "name": case["name"],
-                "question": case["question"],
-                "expected_route": case["route"],
+                "name": CASES[0]["name"],
+                "question": CASES[0]["question"],
+                "expected_route": CASES[0]["route"],
                 "status": status,
                 "error_type": type(exc).__name__,
                 "error": str(exc),
             })
 
+            append_skipped(
+                records,
+                CASES[1:],
+                "FinSight initialization failed before evaluation began.",
+            )
+
         save_summary(records, checker_results)
         return
 
     try:
-        for case in CASES:
+        for case_index, case in enumerate(CASES):
             print("\n" + "=" * 72)
             print("QUESTION:", case["name"])
             print(case["question"])
@@ -402,6 +463,8 @@ def main():
                 "expected_route": case["route"],
                 "status": "pending",
             }
+
+            stop_for_quota = False
 
             try:
                 output = bot.ask(
@@ -429,6 +492,7 @@ def main():
                 print("SQL:", sql)
                 print("SOURCES:", sources)
                 print("UNVERIFIED:", warnings)
+
                 print(
                     "ROUTE CHECK:",
                     "PASS" if record["route_pass"] else "FAIL",
@@ -476,8 +540,8 @@ def main():
                         and cited.issubset(available)
                     )
 
-                    expected_pages_found = (
-                        expected_pages.issubset(retrieved_pages)
+                    expected_pages_found = expected_pages.issubset(
+                        retrieved_pages
                     )
 
                     rag_pass = (
@@ -500,10 +564,7 @@ def main():
                         "answer_pass": rag_pass,
                     })
 
-                    print(
-                        "EXPECTED PAGES FOUND:",
-                        expected_pages_found,
-                    )
+                    print("EXPECTED PAGES FOUND:", expected_pages_found)
                     print("CITATIONS PRESENT:", citation_present)
                     print(
                         "CITATIONS MATCH RETRIEVED SOURCES:",
@@ -514,7 +575,7 @@ def main():
                         "PASS" if rag_pass else "FAIL",
                     )
 
-                # Only mark a question completed after its checks finish.
+                # Only completed checks contribute to quality metrics.
                 record["status"] = "completed"
 
             except Exception as exc:
@@ -537,7 +598,25 @@ def main():
                     str(exc),
                 )
 
+                stop_for_quota = (
+                    status == "api_error"
+                    and is_quota_exhaustion(exc)
+                )
+
             records.append(record)
+
+            if stop_for_quota:
+                print(
+                    "\nQuota exhaustion detected. "
+                    "Skipping the remaining evaluation questions."
+                )
+
+                append_skipped(
+                    records,
+                    CASES[case_index + 1:],
+                    "Skipped because an earlier request exhausted API quota.",
+                )
+                break
 
     finally:
         connection = getattr(bot, "conn", None)
