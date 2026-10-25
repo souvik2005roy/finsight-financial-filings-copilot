@@ -1,6 +1,7 @@
 
 import os
 import streamlit as st
+from websockets import route
 from pipeline import FinSight
 
 
@@ -28,9 +29,14 @@ def show_metadata(metadata):
     """Display the route, sources, SQL, and checker warnings."""
     route = metadata.get("route")
 
+    route_labels = {
+        "sql": "SQL / Financial data",
+        "docs": "RAG / Annual reports",
+        "both": "SQL + RAG / Financial data + annual reports",
+    }
+
     if route:
-        label = "SQL / Financial data" if route == "sql" else "RAG / Annual reports"
-        st.caption(f"Answer route: {label}")
+        st.caption(f"Answer route: {route_labels.get(route, route)}")
 
     sources = metadata.get("sources") or []
     if sources:
