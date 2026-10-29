@@ -1,5 +1,4 @@
-﻿
-"""FinSight router: SQL, RAG, and combined SQL + RAG answering."""
+﻿"""FinSight: SQL, RAG, combined routing, and answer verification."""
 
 import os
 import re
@@ -7,7 +6,7 @@ import re
 from llm import ask_llm
 from sql_tool import load_db, sql_answer
 from rag import Retriever, rag_answer
-from checker import unverified_numbers
+from checker import unverified_numbers, unverified_citations
 
 
 class FinSight:
@@ -28,48 +27,50 @@ class FinSight:
         self.retriever = Retriever(docs)
 
     def route(self, question):
-        """Route a question to SQL, documents, or both."""
+        """Classify a question as SQL, DOCS, or BOTH."""
+
         response = ask_llm(
-            f"""Classify the question using exactly ONE word.
+            f"""Reply with exactly one word: SQL, DOCS, or BOTH.
 
-SQL = The question needs structured financial data, such as revenue,
-profit, debt, employee counts, ratios, or numerical comparisons.
+SQL = the question needs numerical data from the financials table,
+including revenue, profit, debt, margins, employees, comparisons,
+or calculations.
 
-DOCS = The question needs narrative information from annual reports,
-such as risks, strategy, outlook, explanations, or disclosures.
+DOCS = the question needs narrative information from annual reports,
+including risks, strategy, outlook, explanations, or disclosures.
 
-BOTH = The question requires BOTH a structured financial result
-AND narrative evidence from annual reports.
-
-Return exactly one of: SQL, DOCS, BOTH.
+BOTH = the question needs both financial-table data and information
+from annual-report passages.
 
 Question: {question}"""
         )
 
-        response = (response or "").strip().upper()
-        response = response.strip("`*. :\t\r\n")
+        response_text = str(response).strip()
+        normalized = response_text.upper().strip(
+            " \t\r\n`'\".,:;"
+        )
 
-        # Handle the intended one-word response first.
-        if response in {"SQL", "DOCS", "BOTH"}:
-            return response.lower()
+        # Prefer an exact classification response.
+        if normalized in {"SQL", "DOCS", "BOTH"}:
+            return normalized.lower()
 
-        # Be tolerant of a model that returns an explanatory sentence.
-        if re.search(r"\bBOTH\b", response):
+        # Fallback in case the model returns additional text.
+        if re.search(r"\bBOTH\b", response_text, re.IGNORECASE):
             return "both"
 
-        if re.search(r"\bSQL\b", response):
+        if re.search(r"\bSQL\b", response_text, re.IGNORECASE):
             return "sql"
 
-        if re.search(r"\bDOCS\b", response):
+        if re.search(r"\bDOCS\b", response_text, re.IGNORECASE):
             return "docs"
 
-        # Conservative fallback when the classification is unclear.
+        # Conservative default for narrative questions.
         return "docs"
 
     def _both_answer(self, question, mode="hybrid"):
-        """Combine SQL financial results with annual-report evidence."""
+        """Combine SQL results and annual-report evidence."""
 
-        # Run the existing SQL path to obtain a read-only query and result.
+        # Retrieve structured financial evidence.
         _, sql, sql_evidence = sql_answer(
             question,
             self.conn,
@@ -77,7 +78,7 @@ Question: {question}"""
             self.sample,
         )
 
-        # Retrieve report passages, preserving their PDF-page citations.
+        # Retrieve page-aware report passages.
         indexes = self.retriever.search(
             question,
             k=4,
@@ -91,16 +92,22 @@ Question: {question}"""
 
         for idx in indexes:
             citation = self.retriever.citation_for(idx)
-            content = self.retriever.chunks[idx]
+            chunk = self.retriever.chunks[idx]
 
+            # Include the citation in the generation prompt.
             document_context_parts.append(
-                f"{citation}\n{content}"
+                f"{citation}\n{chunk}"
             )
-            document_evidence_parts.append(content)
+
+            # Keep the citation metadata separate from the evidence
+            # used by the numerical checker.
+            document_evidence_parts.append(chunk)
             document_sources.append(citation)
 
         if document_context_parts:
-            document_context = "\n\n".join(document_context_parts)
+            document_context = "\n\n".join(
+                document_context_parts
+            )
         else:
             document_context = (
                 "No relevant annual-report passages were retrieved."
@@ -113,45 +120,68 @@ Question: {question}"""
         else:
             document_evidence = ""
 
-        # Use both evidence sources to generate one final answer.
-        prompt = f"""Answer the user's question using BOTH evidence
-sources below.
+        sql_result_text = str(sql_evidence or "").strip()
+
+        if not sql_result_text:
+            sql_result_text = "No SQL result rows were returned."
+
+        prompt = f"""You are FinSight, a financial research assistant.
+
+Answer the user's question using only the supplied SQL result and
+annual-report passages.
 
 Rules:
-- Use the SQL result for structured financial figures and calculations.
-- Use annual-report passages for narrative claims and risk explanations.
-- Cite each material report-based factual claim using the exact
-  source label supplied with the passage.
-- Never invent figures, years, report pages, or citations.
-- Do not interchange reported EBIT margin, underlying EBIT margin,
-  and operating profit divided by revenue.
-- If either evidence source is insufficient, explain the limitation.
-- Distinguish calculated changes from reported figures.
-- Answer clearly and concisely.
+1. Use SQL results for numerical financial metrics and calculations.
+2. Use annual-report passages for narrative disclosures, risks,
+   strategy, explanations, and outlook.
+3. Do not invent financial figures, facts, or citations.
+4. Cite report-based claims using the exact filename and PDF page
+   citation supplied with the relevant passage.
+5. Do not create citations for pages that were not supplied.
+6. If the evidence does not answer part of the question, state this
+   limitation clearly.
+7. Distinguish reported EBIT margin from underlying EBIT margin
+   excluding discontinued operations. Do not treat these metrics
+   as interchangeable.
+8. Do not derive reported EBIT margin by dividing operating profit
+   by revenue unless that calculation is explicitly requested and
+   the definitions support it.
+9. Explain financial comparisons and percentage-point changes
+   accurately.
 
-Question:
+User question:
 {question}
 
 SQL query:
-{sql}
+{sql or "No SQL query available."}
 
 SQL result:
-{sql_evidence or "No SQL result was returned."}
+{sql_result_text}
 
-Annual-report passages:
+Retrieved annual-report passages:
 {document_context}
 
-Provide one integrated answer grounded in the supplied evidence.
+Write a direct, evidence-based answer. Use report-page citations
+where appropriate and explain any limitations in the evidence.
 """
 
         answer = ask_llm(prompt)
 
-        combined_evidence = (
-            "SQL result:\n"
-            + (sql_evidence or "")
-            + "\n\nAnnual-report evidence:\n"
-            + document_evidence
-        )
+        # This evidence is used for numerical verification. Citation
+        # labels are intentionally excluded from the report text.
+        evidence_parts = []
+
+        if str(sql_evidence or "").strip():
+            evidence_parts.append(
+                f"SQL result:\n{sql_evidence}"
+            )
+
+        if document_evidence:
+            evidence_parts.append(
+                f"Annual-report evidence:\n{document_evidence}"
+            )
+
+        combined_evidence = "\n\n".join(evidence_parts)
 
         sources = ["financials table"] + sorted(
             set(document_sources)
@@ -160,7 +190,8 @@ Provide one integrated answer grounded in the supplied evidence.
         return answer, sql, sources, combined_evidence
 
     def ask(self, question, mode="hybrid"):
-        """Answer using SQL, RAG, or combined SQL + RAG."""
+        """Route the question and verify the generated answer."""
+
         route = self.route(question)
 
         if route == "sql":
@@ -175,11 +206,10 @@ Provide one integrated answer grounded in the supplied evidence.
         elif route == "both":
             answer, sql, sources, evidence = self._both_answer(
                 question,
-                mode=mode,
+                mode,
             )
 
         else:
-            route = "docs"
             answer, sources, evidence = rag_answer(
                 question,
                 self.retriever,
@@ -187,12 +217,29 @@ Provide one integrated answer grounded in the supplied evidence.
             )
             sql = None
 
+        # Check numerical claims before adding any warning text.
         bad = unverified_numbers(answer, evidence)
+
+        # Verify that PDF citations in the answer match the
+        # sources returned by the retrieval and SQL paths.
+        citation_warnings = unverified_citations(
+            answer,
+            sources,
+        )
 
         if bad:
             answer += (
                 "\n\n[WARNING] Unverified numbers "
-                f"(not found in the evidence): {bad}"
+                "(not found in the evidence): "
+                f"{bad}"
+            )
+
+        if citation_warnings:
+            answer += (
+                "\n\n[WARNING] Citation verification warning: "
+                "These citations were not among the retrieved "
+                "sources: "
+                + "; ".join(citation_warnings)
             )
 
         return {
@@ -201,5 +248,6 @@ Provide one integrated answer grounded in the supplied evidence.
             "sql": sql,
             "sources": sources,
             "unverified": bad,
+            "unverified_citations": citation_warnings,
             "evidence": evidence,
         }

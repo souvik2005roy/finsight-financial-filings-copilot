@@ -300,3 +300,38 @@ def unverified_numbers(answer, evidence, tol=0.01):
 
     return bad
 
+
+
+def unverified_citations(answer: str, sources: list[str]) -> list[str]:
+    """Return PDF page citations absent from the retrieved-source list."""
+
+    import re
+
+    pattern = re.compile(
+        r"\[([^\[\]\n]*?\.pdf\s*,\s*PDF\s+page\s+\d+)\]",
+        re.IGNORECASE,
+    )
+
+    def normalize(value: str) -> str:
+        value = str(value).strip().strip("[]")
+        return re.sub(r"\s+", " ", value).casefold()
+
+    citations = [
+        match.group(0)
+        for match in pattern.finditer(answer)
+    ]
+
+    valid_sources = {
+        normalize(source)
+        for source in sources
+        if source
+    }
+
+    return sorted(
+        {
+            citation
+            for citation in citations
+            if normalize(citation) not in valid_sources
+        },
+        key=str.casefold,
+    )

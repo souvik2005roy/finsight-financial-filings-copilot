@@ -61,3 +61,24 @@ def test_both_route_flags_unsupported_numerical_claim(monkeypatch):
     assert result["unverified"], (
         "The checker should flag the unsupported ₹900 crore claim."
     )
+
+
+def test_both_route_flags_citation_missing_from_retrieved_sources(monkeypatch):
+    unsupported_citation = "[tata_motors_fy2025.pdf, PDF page 77]"
+    answer = (
+        "Supplier risks are discussed in the report. "
+        f"{unsupported_citation}"
+    )
+    evidence = (
+        "Supplier disruptions may affect operations. "
+        "[tata_motors_fy2025.pdf, PDF page 194]"
+    )
+
+    bot = make_both_route_bot(monkeypatch, answer, evidence)
+    result = bot.ask("Summarize margins and supply-chain risks")
+
+    assert result["route"] == "both"
+    assert result["unverified_citations"] == [
+        unsupported_citation
+    ]
+    assert "Citation verification warning" in result["answer"]
