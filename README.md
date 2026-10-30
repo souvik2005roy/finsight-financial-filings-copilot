@@ -1,314 +1,277 @@
 # FinSight — Financial Filings Copilot
 
-FinSight is a GenAI-powered financial research assistant that answers questions about Tata Motors using structured financial data and annual-report documents. It routes numerical questions to SQLite through text-to-SQL and narrative questions to Retrieval-Augmented Generation (RAG). Answers include source evidence where available, and a numerical evidence checker flags selected unsupported claims.
+FinSight is a **single-company GenAI prototype** for asking questions about Tata Motors' financial data and annual reports. It routes questions to structured SQL, retrieval-augmented generation (RAG), or a combined SQL + RAG workflow. The application is built with Python, SQLite, hybrid document retrieval, Gemini, and Streamlit.
 
-> **Project status:** Working single-company Tata Motors pilot. The project includes a Streamlit interface, SQL and RAG answering paths, page-aware retrieval, a heuristic numerical checker, automated tests, offline evaluation, and a quota-aware live evaluation script. A complete live-LLM answer-quality benchmark is still pending because Gemini API timeouts and quota exhaustion interrupted previous runs.
+> **Project scope:** Tata Motors pilot covering three annual financial records (FY2023–FY2025) and two annual reports. This is a portfolio prototype, not a production financial-advice system or a multi-company platform.
 
-## What It Does
+## Features
 
-- **Question routing:** Uses a language model to select structured financial data (`sql`) or annual-report text (`docs`).
-- **Text-to-SQL:** Generates read-only SQL queries over the financial database and returns answers based on query results.
-- **Hybrid RAG:** Combines BM25 keyword retrieval, `all-MiniLM-L6-v2` vector similarity, and Reciprocal Rank Fusion (RRF).
-- **Page-aware evidence:** Preserves document filenames, PDF page numbers, and chunk IDs for retrieved passages.
-- **Page-diverse retrieval:** Reduces repeated chunks from the same PDF page when selecting evidence for answer generation.
-- **Numerical evidence checking:** Flags selected numbers that cannot be matched to the supplied evidence, with heuristic checks for nearby financial metrics and fiscal years.
-- **Streamlit interface:** Provides a browser-based chat interface with answers, route information, source citations, generated SQL, SQL evidence, and numerical-checker warnings when available.
-- **REST API:** Exposes the application through FastAPI.
-- **Evaluation utilities:** Includes automated tests, financial-source consistency checks, offline retrieval evaluation, and live end-to-end evaluation.
-- **Quota-aware evaluation:** Separates API failures from completed answer evaluations and records skipped questions when a quota-exhaustion error stops the benchmark.
+- **Three-way question routing:** classifies questions as `sql`, `docs`, or `both`.
+- **Text-to-SQL:** generates read-only SQLite queries against the financial table, with a SQL safety check.
+- **Hybrid RAG:** combines BM25 keyword retrieval and `all-MiniLM-L6-v2` vector retrieval using Reciprocal Rank Fusion (RRF).
+- **Page-aware retrieval:** retains PDF filenames, PDF page numbers, and chunk identifiers for source traceability.
+- **Page diversification:** reduces repeated chunks from the same report page in the retrieved context.
+- **Focused retrieval for combined questions:** separates the narrative part of a mixed financial-and-risk question from its numerical wording before searching annual reports.
+- **Combined SQL + RAG answers:** supplies SQL results and retrieved report passages to the answer-generation step.
+- **Answer checks:** flags selected unsupported numeric claims and PDF page citations that do not match the retrieved-source list. Grouped page citations are supported.
+- **Streamlit chat UI:** displays the answer route, sources, generated SQL, evidence, and separate validation warnings.
+- **Offline evaluation:** checks financial/source-register consistency, SQL calculations, retrieval recall, and selected number-checker behaviour.
 
 ## Architecture
 
 ```text
-                         User question
-                               |
-                               v
-                         LLM router
-                               |
-                  +------------+------------+
-                  |                         |
-                  v                         v
-          Financial question        Narrative question
-                  |                         |
-                  v                         v
-             Text-to-SQL           PDF page-aware chunks
-                  |                         |
-                  v                         v
-          Read-only SQL guard       BM25 + vector search
-                  |                         |
-                  v                         v
-           SQLite financial table    RRF + page diversity
-                  |                         |
-                  v                         v
-              LLM answer             LLM answer + citations
-                  |                         |
-                  +------------+------------+
-                               |
-                               v
-                     Numerical evidence checker
-                               |
-                               v
-                  Answer + evidence + warnings
-                               |
-                               v
-                    Streamlit / CLI / REST API
+                              User question
+                                    |
+                                    v
+                              Gemini router
+                                    |
+                 +------------------+------------------+
+                 |                  |                  |
+                SQL                DOCS               BOTH
+                 |                  |                  |
+          Text-to-SQL        PDF text chunks      Original question
+                 |                  |                  |
+          Read-only guard    BM25 + embeddings          +------------------+
+                 |                  |                                     |
+             SQLite DB          RRF ranking                     Text-to-SQL
+                 |                  |                                     |
+                 |          Page diversification                  SQLite DB
+                 |                  |                                     |
+                 |            RAG context                                  |
+                 |                  |                                     |
+                 +------------------+-------------------------------------+
+                                    |
+                           Answer generation
+                                    |
+                    +---------------+---------------+
+                    |                               |
+             Numeric checker                 Citation matcher
+                    |                               |
+                    +---------------+---------------+
+                                    |
+                         Answer + metadata + warnings
+                                    |
+                              Streamlit UI
 ```
 
-**Current scope:** SQL and RAG are separate answering paths. Questions that require both financial calculations and narrative evidence do not yet have a dedicated multi-hop answer workflow.
+### Route behaviour
 
-## Current Tata Motors Dataset
+| Route | Typical question | Evidence source |
+|---|---|---|
+| `sql` | “What was reported EBIT margin in FY2025?” | SQLite financial table and query result |
+| `docs` | “What supply-chain risks are discussed?” | Retrieved annual-report passages |
+| `both` | “How did EBIT margin change, and what supply-chain risks could affect performance?” | SQL result plus focused annual-report retrieval |
 
-The pilot uses two publicly available annual reports that must be downloaded separately and stored locally:
+For `both` questions, the original question is used for the SQL step. A focused narrative query is derived for the report-retrieval step so that financial terms do not dominate the RAG search.
 
-- `data/docs/tata_motors_fy2023.pdf` — Tata Motors FY2022–23 annual report.
-- `data/docs/tata_motors_fy2025.pdf` — Tata Motors FY2024–25 annual report.
+## Data included in the pilot
 
-The financial dataset contains three annual records: FY2023, FY2024, and FY2025. It includes revenue, operating profit, net profit, reported EBIT and EBITDA margins, net automotive debt/cash, and the separately defined underlying EBIT margin where recorded.
+### Financial dataset
 
-The principal financial dataset used by the evaluation script is:
+The application uses:
 
-`data/financials_tata_motors_v2.csv`
+- `data/financials_tata_motors_v2.csv` — three annual records for FY2023, FY2024, and FY2025.
+- `data/financial_sources.csv` — source register connecting financial observations to report filenames, PDF pages, labels, and definition notes.
 
-The source register is:
+The financial table includes fields such as revenue, operating profit, net profit, total debt, employees, reported EBIT/EBITDA margins, net automotive debt, and underlying EBIT margin where recorded.
 
-`data/financial_sources.csv`
+### Annual reports
 
-The source register associates financial observations with source reports, PDF page numbers, labels, and notes about definitions. Automated validation checks that the financial CSV and source register agree.
+Place the following PDFs in `data/docs/`:
 
-**Important data-quality limitation:** Internal consistency does not independently prove that every financial value was transcribed correctly. Source labels, financial definitions, reporting basis, and units still require manual review.
+- `tata_motors_fy2023.pdf` — FY2022–23 annual report.
+- `tata_motors_fy2025.pdf` — FY2024–25 annual report.
 
-Headline EBIT margin, underlying EBIT margin, operating profit divided by revenue, total debt, and net automotive debt/cash are distinct measures. They must not be used interchangeably.
+The PDFs are not included in this repository. Obtain them from an authorized source and check the applicable terms before redistributing them. The application’s citation labels use **1-based PDF page order**, which may differ from the printed page number in the report.
 
-Annual-report references use **1-based PDF page order**, which can differ from the printed page number shown in the report.
+### Financial-definition caution
 
-### Financial figures in the current pilot
+Do not treat these as interchangeable:
 
-| Fiscal year | Consolidated revenue (₹ crore) | Operating profit (₹ crore) | Reported EBIT margin |
-|---|---:|---:|---:|
-| FY2023 | 345,966.97 | 42,491.51 | 3.6% |
-| FY2024 | 434,016.00 | 68,831.00 | 8.0% |
-| FY2025 | 439,695.00 | 65,848.00 | 7.9% |
+- reported EBIT margin;
+- underlying EBIT margin excluding discontinued operations;
+- operating profit divided by revenue;
+- total debt; and
+- net automotive debt/cash.
 
-These figures are included to document the current pilot dataset, not to replace verification against the original annual reports.
+For example, the dataset records reported EBIT margins of 3.6% in FY2023 and 7.9% in FY2025, a change of **+4.3 percentage points**. That is a direct difference between the two reported margin values; it is not a percentage growth rate and should not be recomputed from unrelated financial fields.
 
-## Tech Stack
+The validation script confirms internal consistency between the financial CSV and source register. It does **not** independently prove that every value was transcribed correctly from the original report; source figures and accounting definitions still require manual review.
 
-- **Language:** Python 3.12
-- **Data handling:** pandas
-- **Structured storage:** SQLite
-- **PDF extraction:** pypdf
-- **Keyword retrieval:** rank-bm25
-- **Vector retrieval:** Sentence Transformers (`all-MiniLM-L6-v2`)
-- **Hybrid retrieval:** Reciprocal Rank Fusion (RRF) and page-diverse context selection
-- **LLM integration:** Gemini through an OpenAI-compatible API wrapper
-- **Web interface:** Streamlit
-- **REST API:** FastAPI and Uvicorn
-- **Automated testing:** pytest
+## Technology stack
+
+- Python 3.12
+- pandas and SQLite
+- `pypdf` for PDF text extraction
+- `rank-bm25` for keyword retrieval
+- Sentence Transformers with `all-MiniLM-L6-v2` for embeddings
+- Reciprocal Rank Fusion (RRF) and page-diverse selection
+- Gemini through an OpenAI-compatible API client
+- Streamlit for the chat interface
+- FastAPI for the optional REST endpoint
+- pytest for automated tests
 
 ## Setup — Windows PowerShell
 
-Run all commands from the project root, for example:
+Run commands from the project root, for example `E:\Self\finsight`.
 
-`E:\Self\finsight`
-
-If PowerShell blocks virtual-environment activation, use `.venv\Scripts\python.exe` directly.
-
-### 1. Create the virtual environment and install dependencies
+### 1. Create the environment and install dependencies
 
 ```powershell
 python -m venv .venv
-
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The dependencies should include Streamlit, pandas, pypdf, rank-bm25, sentence-transformers, openai, FastAPI, Uvicorn, and pytest.
+If PowerShell blocks virtual-environment activation, continue using `.\.venv\Scripts\python.exe` directly as shown above.
 
-### 2. Configure the data paths and model
+### 2. Add the data files
+
+Create the report directory if it does not already exist:
+
+```powershell
+New-Item -ItemType Directory -Force .\data\docs | Out-Null
+```
+
+Place the two annual-report PDFs in `data/docs/` using the exact filenames listed in the [Data included in the pilot](#annual-reports) section. Ensure the Tata Motors financial CSV and source register are in `data/`.
+
+### 3. Configure environment variables
 
 ```powershell
 $env:FINSIGHT_FINANCIALS_CSV = "data/financials_tata_motors_v2.csv"
 $env:FINSIGHT_DOCS_DIR = "data/docs"
-$env:LLM_MODEL = "gemini-3.6-flash"
 ```
 
-The model name is configurable. Use a model currently available to your Google AI Studio project, and update the value when changing models.
+Set `LLM_MODEL` to a Gemini model available to your Google AI Studio project if you need to override the default configured in `llm.py`:
 
-### 3. Configure the API key securely
+```powershell
+$env:LLM_MODEL = "<your-enabled-gemini-model>"
+```
 
-Create or retrieve an API key through [Google AI Studio](https://aistudio.google.com/apikey).
-
-Set it in the current PowerShell session without placing the key in source files:
+Enter the API key privately in the current PowerShell session. The secure prompt does not display the characters as you type or paste:
 
 ```powershell
 $keySecure = Read-Host "Enter Gemini API key" -AsSecureString
-
-$env:LLM_API_KEY = (
-    New-Object System.Net.NetworkCredential("", $keySecure)
-).Password.Trim()
+$env:LLM_API_KEY = (New-Object System.Net.NetworkCredential("", $keySecure)).Password.Trim()
+Remove-Variable keySecure
 ```
 
-The environment variable is local to that terminal session. If you open another terminal, configure it again.
+Do not paste API keys into source code, chat messages, screenshots, README files, or Git. These environment variables apply to the current terminal session. If you open a new terminal, configure them again. API availability and rate limits depend on the Google AI Studio project and selected model. A quota or service error does not represent model-answer accuracy.
 
-**Never commit API keys, paste them into public issues, or include them in screenshots or source code.** If a key is accidentally exposed, revoke it and create a replacement.
+## Run the application
 
-API availability and rate limits depend on the model and Google AI Studio project. A `503` response can indicate temporary service unavailability. A quota-exhaustion response may require waiting for the applicable quota to reset or reviewing the project's quota settings. Repeatedly retrying a request does not necessarily solve either problem.
-
-### 4. Download the annual reports
-
-Download the appropriate annual reports from the official company source and save them under the exact filenames listed in the dataset section.
-
-Do not commit or redistribute annual-report PDFs unless the applicable terms permit it. The repository should contain the source code and instructions needed to obtain the data, not automatically include the original PDFs.
-
-## Run FinSight
-
-### Streamlit web interface
-
-Launch the browser-based interface:
+### Streamlit interface
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run .\streamlit_app.py
 ```
 
-The interface supports financial and narrative questions, displays the generated answer, and exposes supporting details such as citations, SQL, SQL evidence, and numerical-checker warnings when available.
+Open the local URL printed by Streamlit (typically `http://localhost:8501`). The interface shows the route, sources, generated SQL, evidence, and checker warnings.
 
-Example questions:
-
-- What was Tata Motors' reported EBIT margin in FY2025?
-- How did its reported EBIT margin change from FY2023 to FY2025?
-- What supply-chain risks does Tata Motors discuss, including supplier and logistics disruptions, raw-material shortages, and climate-related risks?
-
-### Command-line chat
+### Command-line interface
 
 ```powershell
 .\.venv\Scripts\python.exe .\app.py
 ```
 
-### REST API
-
-Start the FastAPI service:
+### REST API (optional)
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn api:app --port 8000
 ```
 
-Open [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs) to inspect the API documentation and try the `/ask` endpoint.
+Open `http://127.0.0.1:8000/docs` to inspect the FastAPI documentation and try the `/ask` endpoint.
 
-## Tests and Evaluation
+## Demo questions
 
-### 1. Automated tests
+### 1. SQL — financial lookup
 
-Run the complete test suite:
+**Question:** What was Tata Motors' consolidated revenue from operations in FY2025?
+
+Expected dataset value: **₹4,39,695 crore**. The UI should show the SQL route, generated query, and SQL result.
+
+### 2. SQL — financial comparison
+
+**Question:** How did Tata Motors' reported EBIT margin change from FY2023 to FY2025?
+
+Expected dataset values: FY2023 **3.6%**, FY2025 **7.9%**, change **+4.3 percentage points**.
+
+### 3. RAG — narrative risk research
+
+**Question:** What supply-chain risks does Tata Motors discuss, including supplier and logistics disruptions, raw-material shortages, and climate-related risks?
+
+Relevant pages found in previous retrieval runs include FY2025 PDF pages **75, 194, and 195**, and FY2023 PDF pages **86, 243, and 244**. The exact top-four passages may vary with the query and retrieval implementation. The answer should cite only pages actually supplied to the generator.
+
+### 4. Combined SQL + RAG
+
+**Question:** How did Tata Motors' reported EBIT margin change from FY2023 to FY2025, and what supply-chain risks could affect its future financial performance?
+
+Expected SQL values: **3.6%**, **7.9%**, and **+4.3 percentage points**. The narrative portion should be supported by retrieved annual-report passages.
+
+## Tests and evaluation
+
+### Automated tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The most recently observed local run passed **34 tests**. Rerun the command after changing the code to confirm the current result.
+The latest recorded test run collected and passed **52 tests**. Run the suite again after making changes; the result can differ if the code or environment changes.
 
-The tests cover areas such as numerical checking, citation handling, financial-data validation, SQL safety and calculations, RAG metadata, and evaluation-summary and quota-handling logic.
-
-### 2. Local evaluation — no Gemini calls
+### Offline validation — no Gemini calls
 
 ```powershell
 .\.venv\Scripts\python.exe .\evaluate_local.py
 ```
 
-The offline evaluation checks:
+The latest successful offline run reported:
 
-- Financial CSV and source-register consistency.
-- Duplicate company-year rows and source keys.
-- SQLite financial results and calculations.
-- Retrieval recall on the manually labelled benchmark.
-- Selected numerical-checker behaviour.
+- Financial rows: 3.
+- Source-register records: 20; values matched: 20/20.
+- Duplicate company/year rows: 0; duplicate source keys: 0.
+- SQLite financial checks: PASS.
+- Retrieval corpus: 6,779 indexed chunks.
+- Number-checker sanity tests: PASS.
+- Live Gemini calls during this evaluation: 0.
 
-The latest recorded local run reported that financial data consistency, SQLite checks, retrieval benchmarking, and number-checker sanity checks all passed.
+### Retrieval benchmark
 
-### 3. Retrieval comparison
+The manually labelled four-query benchmark reported the following average relevant-page recall at the top four retrieved results:
 
-```powershell
-.\.venv\Scripts\python.exe .\evaluate_retrieval.py
-```
-
-The current four-query manually labelled benchmark reported the following average top-four relevant-page recall:
-
-| Retrieval method | Average Recall@4 |
+| Retrieval method | Average recall@4 |
 |---|---:|
 | BM25 | 0.812 |
 | Vector search | 0.750 |
 | Standard hybrid | 0.875 |
-| Diversified hybrid | 1.000 |
+| Hybrid-diverse | 1.000 |
 
-These results apply only to the current small, manually labelled benchmark for one company's reports.
+These are preliminary results on **four manually labelled questions** for one company's reports. Recall@4 measures retrieval of labelled relevant pages; it is **not** answer accuracy, claim faithfulness, or proof of broad retrieval performance. The focused narrative-query tests also check query construction, but they do not by themselves establish improved end-to-end answer accuracy.
 
-**Recall@4 is not answer accuracy, faithfulness, or proof that every cited claim is correct.** The sample is too small to support broad performance claims or generalisation to other companies.
+### Live LLM evaluation
 
-### 4. Live end-to-end evaluation — uses Gemini API quota
+The repository includes `evaluate_answers.py` for a small end-to-end evaluation. Earlier attempts were interrupted by Gemini service errors and quota exhaustion, so a complete, reliable aggregate live answer-accuracy score is **not currently reported**. Selected manual Streamlit checks have exercised the SQL, RAG, and combined routes, but they are not a substitute for a complete benchmark.
 
-```powershell
-.\.venv\Scripts\python.exe .\evaluate_answers.py
-```
+## Verification design and limitations
 
-The five-question evaluation covers:
+- **Numerical checker:** a heuristic compares selected numeric claims in the generated answer with the evidence text and flags values it cannot match. It is not a semantic fact verifier and can produce false positives or miss unsupported claims. A `5.0` warning appeared in one combined-answer demonstration and was not fully diagnosed; do not silently suppress such warnings.
+- **Citation checker:** checks whether PDF filename/page references in the answer appear in the retrieved-source list. It supports grouped page citations, but source-list matching does not prove that the cited passage entails or supports the claim.
+- **Text-to-SQL:** read-only validation prevents common write/DDL operations, but it does not guarantee that every generated SELECT query expresses the intended accounting metric. Review query output and financial definitions.
+- **Routing:** route selection depends on the LLM classifier; API availability, latency, and model behaviour can affect a live request.
+- **Scope:** this pilot covers one company, three annual financial records, and two annual reports. It has no multi-company ingestion pipeline or public production deployment.
 
-1. FY2025 reported EBIT margin.
-2. FY2025 consolidated revenue.
-3. EBIT-margin changes from FY2023 to FY2025.
-4. Supply-chain risks.
-5. Climate and raw-material risks.
+## Security and data handling
 
-It checks the expected route, expected financial numbers for SQL questions, and selected source pages and citation behaviour for narrative questions.
+- Never commit API keys, `.env` files, or terminal history containing secrets.
+- Keep `.venv`, caches, temporary files, and local report PDFs out of version control unless there is a specific reason and redistribution is permitted.
+- Verify annual-report values and definitions against the original documents before relying on them.
+- Do not present the prototype as investment advice or a production-grade financial system.
 
-The results are saved to:
+## Future work
 
-`results/answer_eval_latest.json`
+Potential next steps, outside the current pilot scope:
 
-The evaluation script distinguishes completed questions from API failures, other evaluation failures, and skipped questions. When a quota-exhaustion error is detected, the remaining questions are marked as skipped. Questions that did not complete are excluded from answer-quality denominators. Where no questions were evaluated, the corresponding metric is recorded as unavailable rather than being presented as 0%.
-
-**Live evaluation status:** A complete end-to-end live benchmark has not yet been obtained. Previous runs were interrupted by Gemini timeouts, `503` high-demand responses, and quota exhaustion. Those infrastructure failures do not establish that the model's answer accuracy is 0%.
-
-Do not report the incomplete benchmark as a valid aggregate answer-accuracy score. Run the live evaluation again only when API access and quota are available.
-
-## Numerical Checker: Scope and Limitations
-
-The checker uses heuristics to flag selected numeric claims that do not match the supplied evidence. It handles citation metadata, fiscal-year labels, small numbers, and contextual associations between values, financial metrics, and years.
-
-It is not a complete semantic fact verifier.
-
-Potential failure modes include:
-
-- A number appearing in evidence under the wrong metric or fiscal year.
-- Ambiguous sentences where the nearest metric or year is not the intended association.
-- Legitimate values being flagged when evidence formatting is inconsistent.
-- Incorrect claims escaping detection because a matching number appears somewhere in the evidence.
-
-Automated tests establish expected behaviour for selected cases; they do not prove that every generated answer is correct. Stronger claim-level verification and independently reviewed evidence remain future improvements.
-
-## Known Limitations
-
-- The dataset covers only Tata Motors, with three annual financial records.
-- Only two annual reports are used in the current pilot.
-- The manually labelled retrieval benchmark contains four queries and is not large enough for broad performance claims.
-- Live LLM answer accuracy has not yet been established by a complete benchmark.
-- Citation presence does not guarantee that a claim is fully supported by the cited passage.
-- Numerical checking is heuristic and cannot guarantee semantic correctness.
-- Text-to-SQL may generate a plausible but incorrect query or use the wrong financial definition.
-- Questions requiring SQL and report-text evidence in one combined answer do not yet have a dedicated multi-hop flow.
-- A public deployment and multi-company ingestion pipeline are not included in the current pilot.
-
-## Suggested Next Improvements
-
-1. Expand the independently verified evaluation set and complete the live answer-quality benchmark when API access and quota are available.
-2. Improve claim-level citation and metric/year verification, including harder edge cases for numerical checking.
-3. Add a dedicated combined SQL + RAG workflow for questions that require financial calculations and narrative evidence in one answer.
-4. Add more companies only after defining consistent financial metric mappings, units, reporting bases, and source provenance.
-5. Polish the existing Streamlit interface and prepare deployment after reliability checks pass.
-
-## Security and Data Handling
-
-- Never commit API keys or `.env` files.
-- Keep `.venv`, Python caches, temporary files, and sensitive logs out of version control.
-- Check the licensing and usage terms before redistributing annual-report PDFs.
-- Keep the financial CSV and its source register traceable to original reports.
-- Disclose the single-company scope and preliminary benchmark results accurately in demos, documentation, and interviews.
+1. Expand the independently reviewed retrieval and answer-evaluation datasets.
+2. Complete a quota-available live end-to-end evaluation and report answer-level metrics.
+3. Improve claim-level evidence entailment and reduce false positives in numerical verification.
+4. Extend the data model and source validation before adding more companies.
+5. Add deployment and operational monitoring only after reliability and data governance requirements are defined.
