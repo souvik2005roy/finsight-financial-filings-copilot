@@ -42,3 +42,32 @@ def test_returns_only_the_unverified_citation():
     assert unverified_citations(answer, sources) == [
         "[tata_motors_fy2025.pdf, PDF page 77]"
     ]
+def test_accepts_grouped_citations_when_all_pages_are_retrieved():
+    answer = (
+        "Supply risks are discussed "
+        "[tata_motors_fy2025.pdf, PDF page 75; "
+        "tata_motors_fy2023.pdf, PDF page 86]"
+    )
+
+    sources = [
+        "[tata_motors_fy2025.pdf, PDF page 75]",
+        "[tata_motors_fy2023.pdf, PDF page 86]",
+    ]
+
+    assert unverified_citations(answer, sources) == []
+
+
+def test_flags_only_missing_page_in_grouped_citation():
+    answer = (
+        "Supply risks "
+        "[tata_motors_fy2025.pdf, PDF page 75; "
+        "tata_motors_fy2025.pdf, PDF page 99]"
+    )
+
+    sources = [
+        "[tata_motors_fy2025.pdf, PDF page 75]",
+    ]
+
+    assert unverified_citations(answer, sources) == [
+        "[tata_motors_fy2025.pdf, PDF page 99]"
+    ]

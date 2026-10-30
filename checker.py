@@ -302,36 +302,48 @@ def unverified_numbers(answer, evidence, tol=0.01):
 
 
 
+
 def unverified_citations(answer: str, sources: list[str]) -> list[str]:
-    """Return PDF page citations absent from the retrieved-source list."""
+    """
+    Detect PDF-page citations in an answer that do not appear
+    in the retrieved-source list.
+
+    Supports grouped citations containing multiple PDF pages.
+    """
 
     import re
 
-    pattern = re.compile(
-        r"\[([^\[\]\n]*?\.pdf\s*,\s*PDF\s+page\s+\d+)\]",
+    citation_pattern = re.compile(
+        r"(?P<filename>[\w.-]+\.pdf)"
+        r"\s*,\s*PDF\s+page\s+"
+        r"(?P<page>\d+)",
         re.IGNORECASE,
     )
 
-    def normalize(value: str) -> str:
-        value = str(value).strip().strip("[]")
-        return re.sub(r"\s+", " ", value).casefold()
+    # Extract all valid citations from the retrieved sources.
+    valid_sources = set()
 
-    citations = [
-        match.group(0)
-        for match in pattern.finditer(answer)
-    ]
+    for source in sources or []:
+        for match in citation_pattern.finditer(str(source)):
+            filename = match.group("filename").casefold()
+            page = int(match.group("page"))
 
-    valid_sources = {
-        normalize(source)
-        for source in sources
-        if source
-    }
+            valid_sources.add((filename, page))
 
-    return sorted(
-        {
-            citation
-            for citation in citations
-            if normalize(citation) not in valid_sources
-        },
-        key=str.casefold,
-    )
+    # Check every individual PDF-page reference in the answer.
+    unverified = []
+    seen = set()
+
+    for match in citation_pattern.finditer(str(answer or "")):
+        filename = match.group("filename")
+        page = int(match.group("page"))
+
+        key = (filename.casefold(), page)
+
+        if key not in valid_sources and key not in seen:
+            seen.add(key)
+            unverified.append(
+                f"[{filename}, PDF page {page}]"
+            )
+
+    return unverified
